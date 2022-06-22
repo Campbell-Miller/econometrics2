@@ -1,0 +1,296 @@
+---
+title: "project003"
+author: "Campbell Miller"
+date: "2/28/2022"
+output: html_document
+---
+
+```{r setup, warning=FALSE,include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, results='hide'}
+library(pacman)
+p_load(
+  'magrittr', 'broom', 'skimr', 'ggplot2','tidyverse', 'readr', 'visdat', 'rsample', 'janitor', 'tidymodels', 'yardstick', 'baguette', 'ranger', 'parsnip'
+)
+
+
+setwd('C:/Users/campb/OneDrive/econometrics/MLprojects')
+fulldata <- read.csv("election-2016.csv")
+
+fulldata %>% mutate(i_republican_2016 = ifelse(i_republican_2016 == 1, 'rep won', 'dem won'))
+
+
+
+fulldata$i_republican_2016 <- as.character(as.integer(fulldata$i_republican_2016))
+
+set.seed(23336)
+
+#create 5fold cv
+voting_cv = fulldata %>% vfold_cv(v = 5)
+```
+
+Part 1: One tree
+
+01. Using 5-fold cross validation to tune the cost complexity of pruning (and min_n if you'd like), train and tune a decision tree (decision_tree). Use a real classification metric for tuning (not MSE). Explain which metric you chose and why. (No matter which metric you choose, make sure you also record accuracy.)
+
+```{r}
+
+#create recipe
+voting_recipe =
+  recipe(i_republican_2016 ~ income_median_hh + pop_pct_change + n_votes_republican_2012, data = fulldata) %>%
+   #Normalize  predictors
+  step_normalize(all_predictors() & all_numeric()) %>% 
+  # KNN imputation for categorical predictors
+  step_impute_knn(all_predictors() & all_nominal(), neighbors = 5) %>%
+  # Create dummies for categorical variables
+  step_dummy(all_predictors() & all_nominal())
+
+voting_clean = voting_recipe %>% prep() %>% juice()
+
+
+
+#defining a decsisn tree model
+voting_tree <- decision_tree(
+  cost_complexity = tune(),
+  tree_depth = tune(),
+  min_n = tune()) %>%
+  set_engine("rpart") %>%
+  set_mode("classification")
+  
+
+#define workflow
+voting_tree_wf = workflow() %>%
+  add_model(voting_tree) %>% 
+  add_recipe(voting_recipe)
+
+#cross validation and tune hyperparamters
+cv_tree = voting_tree_wf %>%
+  tune_grid(
+    voting_cv,
+    grid = expand_grid(cost_complexity = seq(0, 0.10, by = 0.01), tree_depth = c(1, 2, 5, 10), min_n = c(1,2,3)),
+  metrics = metric_set(accuracy, roc_auc))
+
+#see general metrics
+cv_tree %>%
+  collect_metrics()
+#see model with best accuracy
+best_accuracy <- cv_tree %>%
+  select_best("accuracy")
+best_accuracy
+
+best_roc_auc <- cv_tree %>%
+  select_best("roc_auc")
+best_roc_auc
+
+
+  
+```
+
+
+
+02. What are the values of the hyperparameters of your best model?
+
+For the model with the best accuracy the hyperparameters are: cost complexity of 0.01, tree depth of 5, and minimum number of observations for a node to split of 1.
+For the model with the best AUC-ROC the hyperparameters are: cost complexity of 0, tree depth of 5, and minimum number of observations for a node to split of 1.
+
+
+03. What is the accuracy of your best (chosen) tree model? How does it compare to the accuracy of your worst tree model?
+
+The accuracy in the best model is 85.52%.The accuracy in the worst model is 82.44%
+
+The roc_auc in the best model is 70.1%.The roc_auc in the worst model is 50%.
+
+
+Part 2: Bag o' trees
+
+04. Now tune bagged ensembles, each with at least 50 trees (bag_tree() in tidymodels—specifically baguette). Cross validate using 5-fold cross validation. Record accuracy.
+```{r}
+bagged_tree <- bag_tree(
+  mode = "classification",
+  cost_complexity = tune(),
+  tree_depth = tune(),
+  min_n = tune(),
+  class_cost = NULL) %>% 
+  set_engine(engine = "rpart",
+             times = 51)
+
+# define workflow
+bagged_wf = workflow() %>%
+  add_model(bagged_tree) %>% 
+  add_recipe(voting_recipe)
+
+# fit
+cv_bagged = bagged_wf %>%
+  tune_grid(
+    voting_cv,
+    grid = expand_grid(cost_complexity = seq(0, 0.15, by = 0.05), tree_depth = c(1, 2, 5), min_n = c(1,2,3)),
+  metrics = metric_set(accuracy, roc_auc))
+
+#see general metrics
+cv_bagged %>%
+  collect_metrics()
+#see model with best accuracy
+best_accuracy_bagged <- cv_bagged %>%
+  select_best("accuracy")
+best_accuracy_bagged
+
+best_roc_auc_bagged <- cv_bagged %>%
+  select_best("roc_auc")
+best_roc_auc_bagged
+
+```
+
+
+05. Which hyperparameters did you tune and which values were chosen?
+I tuned cost complexity, tree depth, and minimum number of observations for a node to split. In the highest accuracy model what was chosen was a cost complexity of 0, a tree depth of 5, and a min_n of 3. 
+For the highest roc_auc value what was chosen was a cost complexity of 0, a tree depth of 5 and a min_n of 1.
+
+06. What is the cross-validated accuracy of your best model?
+
+The cross validated accuracy of the best model is 85.49%
+
+
+07. What benefit(s) does an ensemble of bagged trees provide over a single decision tree?
+
+A bagged tree uses bootstrapping to train all the decision trees on differing random subsets of the data since different values of the data get left out or put in multiple times for different bootstrapping attempts. By sampling with replacement bootstrapping in this regard hopes to reduce the variance of the single decision tree.
+
+Part 3: Forests
+
+08. Tune a random forest (rand_forest() in tidymodels) model—using 5-fold cross validation. Again: Include at least 50 trees and record accuracy (and any other metrics you're interested in). Tune at least mtry and min_n.
+
+```{r}
+forest_model = rand_forest(
+  mode = 'classification',
+  engine = 'ranger',
+  mtry = tune(),
+  trees = 51,
+  min_n = tune()
+)
+
+forest_wf = workflow() %>%
+  add_model(forest_model) %>%
+  add_recipe(voting_recipe)
+
+forest_fit = forest_wf %>%
+  tune_grid(
+    voting_cv,
+    grid = expand_grid(mtry = c(1, 2, 3),
+                       min_n = c(1, 2, 5, 10)),
+    metrics = metric_set(accuracy, roc_auc)
+  )
+ 
+
+  #see general metrics
+forest_fit%>%
+  collect_metrics()
+#see model with best accuracy
+best_accuracy_forest <- forest_fit %>%
+  select_best("accuracy")
+best_accuracy_forest
+
+best_roc_auc_forest <- forest_fit%>%
+  select_best("roc_auc")
+best_roc_auc_forest
+
+
+
+```
+
+09. What are the values of the hyperparameters of your best model?
+
+The hyperparameters for the highest accuracy are mtry of 1 and min_n of 10. The hyperparameters for the highest roc_auc are the same.
+
+10. How does the accuracy of your random forest compare to the accuracy of your bagged-tree model? What does this comparison—and the tuned value of mtry—tell you about the importance of decorrelating your trees in this setting?
+
+The accuracy in the highest accuracy model in the random forest was 85.2%. This is about the same as the accuracy of the bagged tree model, but most of the accuracies are about the same here so likely the regression I chose to run was not very effective. In general the random forest should be more accurate then a single decision tree of a bagged tree, because the random forest minimizes overfitting. The mtry value tells you the number of predictors to try at each split, for the random forest the value that was chosen was an mtry of 1 which shows that it is important to decorrelate your trees by having only one predictor to try at each split.
+
+
+Part 4: Boosting
+
+11. Now boost some trees (boost_tree() in tidymodels). Using 5-fold cross validation, tune (at least) the tree depth, the learning rate, and the number of trees. Record the accuracy.
+
+```{r}
+library("xgboost")
+
+boost_model = boost_tree(trees = tune(),
+           tree_depth = tune(),
+           min_n = 10,
+           learn_rate = tune(),
+           mtry = 1
+           ) %>%
+  set_engine("xgboost") %>%
+  set_mode("classification") 
+
+boost_model
+
+boost_wf = workflow() %>%
+  add_model(boost_model) %>%
+  add_recipe(voting_recipe)
+
+
+
+
+```
+
+```{r, warning=FALSE, message=FALSE, results ='hide'}
+boost_fit = boost_wf %>%
+  tune_grid(
+    voting_cv,
+    grid = expand_grid(
+                       learn_rate = c(.001, .01, .1),
+                       trees = c(50, 250, 500),
+                       tree_depth = c(1, 2, 3)),
+    metrics = metric_set(accuracy, roc_auc)
+  )
+ 
+
+```
+
+```{r}
+boost_fit%>%
+  collect_metrics()
+#see model with best accuracy
+best_accuracy_boost <- boost_fit %>%
+  select_best("accuracy")
+best_accuracy_boost
+
+best_roc_auc_boost <- boost_fit%>%
+  select_best("roc_auc")
+best_roc_auc_boost
+```
+
+12. Was the optimal set of hyperparameters fairly "fast" at learning? Explain.
+
+The optimal set of hyperparameters was 500 trees, 1 tree depth and a learning rate of .1. This resulted in an accuracy of 85.62%. The learning rate that was chosen was the highest of the options provided which shows that it was a fairly "fast" learning. This means that the model is updated with 10% of the error from each tree.
+
+
+
+Part 5: Reflection
+
+13. Compare the accuracy across the 4 sections—and across your previous attempts at predicting election outcomes. Which models did the best? Does relaxing linearity appear to help?
+
+All of the calculated accuracies of the different sections were within a percent or two but the highest accuracy was the boosted tree model. The accuracy of the boosted model is higher than all of the models in the previous project as well, thought they are also within a percentage point or so. It appears that all of the nonlinear predictors used in this project were slighlty higher than the previous model which shows that relaxing the linearity assumption did and can improve accuracy.
+
+
+Part 6: Review
+
+14. Why are boosted-tree ensembles so sensitive to the number of trees (relative to the bagged-tree ensembles and random forests)?
+
+Boosted tree ensembles learn from the previous trees, so a larger amount of trees allows for more potential learning and likely a slower learning rate to make use of the larger amount of trees. The other methods do not worry about learning from previous trees so the number of trees themselves do not affect the other trees in their models.
+
+15. How do individual decision trees guard against overfitting?
+
+Individual trees can guard against overfitting by pruning themselves. Pruning can see the regions that increased variance more than they reduced bias and remove them so that the chosen metric is higher. We can tune different values of cost complexity to force trees to pay a price for becoming more complex and prune regions that harm the test metric.
+
+16. How do ensembles trade between bias and variance?
+
+Ensembles take multiple trees and average their results to find the test metric desired. Individual trees may have high variance or bias but when averaged with all the others, it will all be reduced to a more ideal level. Ensembles can trade between bias and variance by allowing for trees to be more noisy through allowing for less trees which would increase bias or allowing them to be more flexible through changing the values of mtry or min_n which would change variance.
+
+17. How do trees allow interactions?
+
+Decision trees follow a path from one node to the next, the second node thus is impacted by the value that was chosen at the previous node. This is a way for them to interact as the value chosen at the second node could be different based on the value of the previous node since the data that goes to the second node will be different based on the choice of the first node. Due to the way decision trees work, we do not need to manually enter interactions as the the tree itself will handle them.
+
+
+

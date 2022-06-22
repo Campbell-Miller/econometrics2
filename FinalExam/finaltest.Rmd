@@ -1,0 +1,270 @@
+---
+title: "testfinal"
+author: "Campbell Miller"
+date: '2022-03-17'
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+
+```{r}
+
+setwd("C:/Users/campb/OneDrive/econometrics/MLprojects/final")
+
+library(pacman)
+# load packages
+p_load(ggplot2,readr,tidyverse,magrittr,modeldata,skimr,janitor,tidymodels, baguette, ranger)
+
+data = read_csv("final-data.csv")
+
+set.seed(23336)
+
+#create 5fold cv
+house_cv = data %>% vfold_cv(v = 5)
+
+#make undervalued factor
+data$undervalued <- as.factor(data$undervalued)
+
+
+
+data %<>% clean_names()
+```
+
+
+
+
+
+```{r}
+skim(data)
+
+
+```
+```{r}
+  #values where na does not mean missing change to 0 so u can mutate them
+  data$alley[is.na(data$alley)] <- 0
+  data$bsmt_qual[is.na(data$bsmt_qual)] <- 0
+  data$bsmt_cond[is.na(data$bsmt_cond)] <- 0
+  data$bsmt_exposure[is.na(data$bsmt_exposure)] <- 0
+  data$bsmt_fin_type1[is.na(data$bsmt_fin_type1)] <- 0
+  data$bsmt_fin_type2[is.na(data$bsmt_fin_type2)] <- 0
+  data$fireplace_qu[is.na(data$fireplace_qu)] <- 0
+
+
+#mutate the 0/na value into what they actually mean
+  data <- data %>%
+  mutate(alley = ifelse(alley == "Grvl", "Grvl",
+                         ifelse(alley == "Pave", "Pave", "NoAlleyAccess"))) %>%
+    
+  mutate(bsmt_qual = ifelse(bsmt_qual == "Ex", "Ex",
+                         ifelse(bsmt_qual == "Gd", "Gd",
+                                ifelse(bsmt_qual == "TA", "TA",
+                         ifelse(bsmt_qual == "Po", "Po", "NoBasement"))))) %>%
+    
+     mutate(bsmt_cond = ifelse(bsmt_cond == "Ex", "Ex",
+                         ifelse(bsmt_cond == "Gd", "Gd",
+                                ifelse(bsmt_cond == "TA", "TA",
+                         ifelse(bsmt_cond == "Po", "Po", "NoBasement"))))) %>%
+    
+    mutate(bsmt_exposure = ifelse(bsmt_exposure == "Gd", "Gd",
+                                  ifelse(bsmt_exposure == "Av", "Av", 
+                                         ifelse(bsmt_exposure == "Mn" , "Mn", 
+                                                ifelse(bsmt_exposure == "No", "No", "NoBasement"))))) %>%
+    
+    mutate(bsmt_fin_type1 = ifelse(bsmt_fin_type1 == "GLQ", "GLQ", 
+                                   ifelse(bsmt_fin_type1 == "ALQ", "ALQ",
+                                          ifelse(bsmt_fin_type1 == "BLQ", "BLQ",
+                                                 ifelse(bsmt_fin_type1 == "Rec", "Rec",
+                                                        ifelse(bsmt_fin_type1 == "LwQ", "LwQ",
+                                                               ifelse(bsmt_fin_type1 == "Unf", "Unf", "NoBasement"))))))) %>%
+    mutate(bsmt_fin_type1 = ifelse(bsmt_fin_type2 == "GLQ", "GLQ", 
+                                   ifelse(bsmt_fin_type2 == "ALQ", "ALQ",
+                                          ifelse(bsmt_fin_type2 == "BLQ", "BLQ",
+                                                 ifelse(bsmt_fin_type2 == "Rec", "Rec",
+                                                        ifelse(bsmt_fin_type2 == "LwQ", "LwQ",
+                                                               ifelse(bsmt_fin_type2 == "Unf", "Unf", "NoBasement")))))))
+  
+  data <- data %>%
+    mutate(fireplace_qu = ifelse(fireplace_qu == "Ex", "Ex",
+                                 ifelse(fireplace_qu == "Gd", "Gd",
+                                        ifelse(fireplace_qu == "TA", "TA",
+                                               ifelse(fireplace_qu == "Fa", "Fa",
+                                                      ifelse(fireplace_qu == "Po", "Po", "NoFireplace"))))))
+
+```
+
+
+```{r}
+
+#correlation matrix to decide which numeric variables to put in regression
+	library("dplyr")
+library("corrplot")
+numericdata <- data 
+
+  numericdata$undervalued <- as.numeric(numericdata$undervalued)
+  
+ numericonly <- select_if(numericdata, is.numeric)
+  numericonly
+
+  #table of correlation
+numericonly.cor = cor(numericonly)
+numericonly.cor
+#plot of correlation
+corrplot(numericonly.cor)
+```
+
+```{r}
+
+
+#predictors chosen as those with highest values in the correlation matrix and some that i did the mutate
+#on before realizing i would not use them all
+recipe_house = recipe(undervalued ~ bsmt_fin_sf1 + overall_qual+ bsmt_unf_sf + x2nd_flr_sf + low_qual_fin_sf + full_bath + bedroom_abv_gr + kitchen_abv_gr + tot_rms_abv_grd + garage_cars + screen_porch + bsmt_qual + fireplace_qu, data = data)
+
+#bsmt_fin_sf1 + overall_qual+ bsmt_unf_sf + x2nd_flr_sf + low_qual_fin_sf + full_bath + bedroom_abv_gr + kitchen_abv_gr + tot_rms_abv_grd + garage_cars + screen_porch + bsmt_qual + fireplace_qu,
+
+#make recipe
+recipe_house <- recipe_house %>%
+  step_impute_mean(all_predictors() & all_numeric()) %>%
+  step_normalize(all_predictors() & all_numeric()) %>% 
+  # KNN imputation for categorical predictors
+  step_impute_knn(all_predictors() & all_nominal()) %>%
+  # Create dummies for categorical variables
+  step_dummy(all_predictors() & all_nominal())
+   
+  
+  
+ house_clean = recipe_house %>% prep() %>% juice()
+house_cv = data %>% vfold_cv(v = 5)
+
+skim(house_clean)
+
+recipe_house
+
+
+```
+
+
+```{r}
+forest_model = rand_forest(
+  mode = 'classification',
+  engine = 'ranger',
+  mtry = tune(),
+  trees = tune(),
+  min_n = tune()
+)
+
+forest_wf = workflow() %>%
+  add_model(forest_model) %>%
+  add_recipe(recipe_house)
+
+forest_fit = forest_wf %>%
+  tune_grid(
+    house_cv,
+    grid = expand_grid(mtry = c(1, 2, 3, 5),
+                       min_n = c(2, 5, 8, 20, 40),
+                       trees = c(10, 50, 100, 150)),
+    metrics = metric_set(accuracy)
+  )
+ 
+
+  #see general metrics
+forest_fit %>%
+  collect_metrics()
+#see model with best accuracy
+best_accuracy_forest <- forest_fit %>%
+  select_best("accuracy")
+
+best_accuracy_forest
+
+forest_fit %>% collect_metrics() %>%
+  filter(.metric == "accuracy")
+
+```
+
+
+
+
+```{r}
+#define a log reg model for the recipe
+model_logreg =
+  logistic_reg() %>%
+  set_engine("glm") %>%
+  set_mode("classification")
+
+#set workflow
+workflow_logreg <- workflow() %>%
+  add_model(model_logreg) %>%
+  add_recipe(recipe_house) 
+  
+#fit
+logreg_fit <- workflow_logreg %>%
+  fit_resamples(house_cv, 
+            metrics = metric_set(accuracy))
+  
+logreg_fit %>% collect_metrics()
+```
+
+
+
+
+
+
+
+
+01 (5 points) Briefly explain why being able to predict whether my model underpredicted a house's price means that your model "beats" my model.
+
+
+  In this case there has already been a lasso model run that generates predictions that says a house is undervalued if the prediction estimates the price to be lower than the actual price. By being able to predict if the already run model underpredicted the house price, there is a baseline of predictions in which to move from. This allows the model that is created to use the predictive power from the previous model and create a better model that goes further than what the previous model did.This model would "beat" the initial model because this model uses what the other model did and predicts to a greater extent.
+  
+  
+  
+
+02 (30 points) Use two different models to predict undervalued.
+One of the models should be an ensemble of trees.The other model should be a non-tree method (and cannot be OLS regression or linear-regression elasticnet). Use cross validation to tune each of the models' hyperparameters—with accuracy as the metric. You should write recipes that clean and prep your data for each model too.
+
+
+  Done above
+
+
+03 (5 points) How did you do? Compare your models' levels of accuracy to the null classier.
+
+```{r}
+data <- data %>%
+  mutate(null_classifier = ifelse(undervalued == "TRUE", 1, 1))
+
+
+null_classifier_results <- ifelse(data$undervalued == "TRUE", 1, 0)
+  table(null_classifier_results)
+  
+null_acc <- 706/(754+706)
+null_acc
+```
+  The null classifier is created for where you assume all of the values of undervalued seen are "TRUE". The null classifier constructed this way has a 48.35% accuracy. The accuracy for the random forest is 63.42% and the accuracy for the logistic regression was 60.27% so they were higher than the null classifier but not very accurate.
+
+
+
+
+04 (5 points) Are all errors equal in this setting? Briefly explain your answer.
+
+
+  For this case a false negative says that you predict the house is not undervalued but it actually is. A false positive is when you predict a house is undervalued when it really is not. The goal in this case is to see if you can "steal" property from your competitor which would be done when they predict a house is undervalued but it is actually not undervalued. For that reason a false negative seems like it would be worse than a false positive. By having a high amount of false negatives, you would not be buying any of the houses that are actually undervalued which is where you get your profit and complete this goal. For this reason you would rather buy all the houses that are undervalued and end up with some that actually are not undervalued (false positive) than not buy any of the houses that are actually undervalued (false negative).
+
+
+
+
+05 (5 points) Why would it be a bad idea to use a linear model here (for example plain OLS or lasso)?
+
+Hint: Think about how undervalued was created.
+
+
+  The variable undervalued was created by running a linear lasso regression. One reason why a linear model may not be good for our goal is that we would be making a linear model off of a linear model so if it turned out that a linear model was not actually effective for our data then we would not be able to easily see it through our two linear models as we have nothing else to compare it to.
+  Undervalued takes the form of a logistic variable with only true and false results. Since you are regressing on a variable with only two possibilities, a linear model is not effective since this is a classification problem. Linear regression does not work well with classification as linear regressions are based on continuous values and cannot adjust well to additions of new data points. For this reason logistic regression or other methods are preferred for predicting upon a classification problem. 
+
+

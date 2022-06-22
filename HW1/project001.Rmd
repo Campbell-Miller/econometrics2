@@ -1,0 +1,492 @@
+---
+title: "ML Project 001"
+author: "Campbell Miller"
+date: "1/31/2022"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+00.
+```{r}
+library(pacman)
+p_load(
+  tidyverse, modeldata, skimr, janitor, kknn, tidymodels, magrittr, broom, stargazer, sandwich, ggplot2, rlang, arsenal, caret
+)
+
+setwd('C:/Users/campb/OneDrive/econometrics/MLprojects')
+fulldata <- read.csv("election-2016.csv")
+```
+001. Just looking at the dummy variables for if Republican candidate won in 2012 vs 2016, you can see an increase of the mean from .77 to .84. This makes sense as the Republican candidate won in 2016 but is also surprising since the Democrat president won in 2012 but the Republican candiates mean is far above .5.
+```{r}
+
+skim(fulldata)
+summary(fulldata)
+```
+02. The two histograms show that less counties were won by the Republican candidate in 2012 than 2016 which makes sense based on results. But what is surprising is that most counties in the country went to the Republican candidate in both elections. This would mean that the counties with high amounts of population tended to vote Democrat especially in the year that the Democrat won. The scatter plots show that the regression line for percent of black population and number of votes for either candidate follows what you would expect (the Democratic candidate earning a higher total number of votes as the population of black citizens in the county increases). A quick look at some other demographics seems to follow the trend of what you would expect.
+```{r}
+ggplot(fulldata, aes(x = i_republican_2012)) +
+  geom_histogram() +
+  xlab("0 For Republican Candidate Lost, 1 for Republican Won") +
+  ylab("Number of Counties") +
+  labs(title = "Amount of Counties where the Republican Candidate Won in 2012")
+
+ggplot(fulldata, aes(x = i_republican_2016)) +
+  geom_histogram() +
+   xlab("0 For Republican Candidate Lost, 1 for Republican Won") +
+  ylab("Number of Counties") +
+  labs(title = "Amount of Counties where the Republican Candidate Won in 2016")
+
+ggplot(fulldata, aes(y = pop_pct_black, 
+                     x = n_votes_republican_2012)) +
+  geom_point() + 
+  geom_smooth(method = "lm", formula = y~x) +
+  xlab("Number of Votes for Republican Candidate in 2012") +
+  ylab("Percent of County Population that's Black") +
+  labs(title = "Number of Votes for Republican based on County's Black Population")
+
+ggplot(fulldata, aes(y = pop_pct_black, x = n_votes_democrat_2012)) +
+  geom_point() +
+  geom_smooth(method = "lm", formula = y~x) +
+   xlab("Number of Votes for Democrat Candidate in 2012") +
+  ylab("Percent of County Population that's Black") +
+  labs(title = "Number of Votes for Democrat based on County's Black Population")
+
+
+
+```
+
+3.
+```{r}
+#80% of sample size
+sample_size <- floor(.8 * nrow(fulldata))
+
+set.seed(0319)
+
+train_ind <- sample(seq_len(nrow(fulldata)), size = sample_size)
+#make training and testing data sets
+train <- fulldata[train_ind, ]
+test  <- fulldata[-train_ind, ]
+
+mean(train$i_republican_2016)
+#.8378
+```
+
+```{r}
+#first basic lin reg model
+basic_reg <- lm(i_republican_2016 ~ i_republican_2012 + pop_pct_change, data = train)
+
+#fit onto training data
+pred1 = predict(object = basic_reg, newdata = train)
+
+#check same dim
+pred1 %>% length()
+train %>% nrow()
+
+#new df w/ predictions
+train_acc1 = data.frame(
+  fips = train$fips,
+  i_republican_2016 = pred1
+)
+
+#convert to 1 or 0 to cmpare with og train data
+train_acc1 <- train_acc1 %>%
+  mutate(i_republican_2016 = ifelse(i_republican_2016 >= 0.50, 1, 0))
+
+
+ class(train_acc1$i_republican_2016)
+ 
+ #convert to numeric to use comparedf
+ train$i_republican_2016 <- as.numeric(train$i_republican_2016)
+ 
+ #compare both data frames
+ summary(comparedf(train, train_acc1))
+ 
+
+```
+
+4.  My first most basic regression had 195 predictions of i_republican_2016 incorrect so it had a 92% accuracy (of course there is a lot of wiggle room with just making everything above .5 equal to 1). My second regression which included interactions had 200 predictions incorrect which leads to a 91% accuracy rate. My third regression which included polynomials had 200 interactions for an accuracy of 91% as well.
+
+```{r}
+#second linear model interactions
+
+
+train <- train %>%
+  mutate(inter_rep_pop = i_republican_2012 * pop_pct_change,
+         inter_home_hh = home_median_value * persons_per_hh )
+
+med_reg <- lm(i_republican_2016 ~ i_republican_2012 + pop_pct_change + inter_rep_pop + home_median_value + persons_per_hh + inter_home_hh, data = train)
+         
+pred2 = predict(object = med_reg, newdata = train)
+
+train_acc2 = data.frame(
+  fips = train$fips,
+  i_republican_2016 = pred2
+)
+
+train_acc2 <- train_acc2 %>%
+  mutate(i_republican_2016 = ifelse(i_republican_2016 >= 0.50, 1, 0))
+         
+ summary(comparedf(train, train_acc2))  
+ 
+```
+
+
+```{r}
+#third linear reg model repeating steps for first one
+
+train <- train %>%
+  mutate(
+    repub_votes_squared = i_republican_2012 * i_republican_2012)
+
+hard_reg <- lm(i_republican_2016 ~ i_republican_2012 + repub_votes_squared + pop_pct_change + inter_rep_pop + home_median_value + persons_per_hh + inter_home_hh, data = train)
+
+pred3 = predict(object = hard_reg, newdata = train)
+
+train_acc3 = data.frame(
+  fips = train$fips,
+  i_republican_2016 = pred3)
+
+train_acc3 <- train_acc3 %>%
+   mutate(i_republican_2016 = ifelse(i_republican_2016 >= 0.50, 1, 0))
+
+summary(comparedf(train, train_acc3))
+
+```
+
+5. The predicted results from my first linear regression model matched 577 of the actual testing data so 47 were incorrect. This gives my first model an out of sample accuracy of 92%.The predicted results from my second model had 46 incorrect predictions, so it is just 1 value more accurate than the initial model.My third model also had 46 incorrect predictions so it and the second model are just slightly above the first model in terms of accuracy.
+
+```{r}
+#test validation set accuracy
+pred1_test = predict(object = basic_reg, newdata = test)
+
+test_acc1 = data.frame(
+  fips = test$fips,
+  i_republican_2016 = pred1_test
+)
+
+test_acc1 <- test_acc1 %>%
+   mutate(i_republican_2016 = ifelse(i_republican_2016 >= 0.50, 1, 0))
+
+
+test1_results <- ifelse(test_acc1$i_republican_2016 == test$i_republican_2016, 1, 0) 
+table(test1_results)
+
+```
+
+```{r}
+#bring over the interactions to the test dataframe
+test <- test %>%
+  mutate(inter_rep_pop = i_republican_2012 * pop_pct_change,
+         inter_home_hh = home_median_value * persons_per_hh )
+
+
+pred2_test = predict(object = med_reg, newdata = test)
+
+test_acc2 = data.frame(
+  fips = test$fips,
+  i_republican_2016 = pred2_test
+)
+
+test_acc2 <- test_acc2 %>%
+   mutate(i_republican_2016 = ifelse(i_republican_2016 >= 0.50, 1, 0))
+
+
+test2_results <- ifelse(test_acc2$i_republican_2016 == test$i_republican_2016, 1, 0) 
+table(test2_results)
+
+
+```
+
+```{r}
+#bring over the polynomial
+test <- test %>%
+   mutate(
+    repub_votes_squared = i_republican_2012 * i_republican_2012)
+
+
+
+pred3_test = predict(object = hard_reg, newdata = test)
+
+test_acc3 = data.frame(
+  fips = test$fips,
+  i_republican_2016 = pred3_test
+)
+
+test_acc3 <- test_acc3 %>%
+   mutate(i_republican_2016 = ifelse(i_republican_2016 >= 0.50, 1, 0))
+
+
+test3_results <- ifelse(test_acc3$i_republican_2016 == test$i_republican_2016, 1, 0) 
+table(test3_results)
+
+
+```
+6. Picking the preferred prediction model in terms of accuracy I would prefer the 2nd or 3rd model, but they only got 1 more prediction correct than the initial model so maybe there is not a huge enough difference to make up for the increased risk of overfitting when putting in additional predictors in the 3rd model.
+
+Part 2
+7.Randomly selected 10 states, including one of the top largest states.
+```{r}
+
+ten_states_data <- fulldata %>%
+  filter(state == "pennsylvania" | state == "maryland" | state == "minnesota" | state == "wisconsin" | state == "alabama" | state == "new york" | state == "new mexico" | state == "connecticut" | state == "iowa" | state == "washington")
+
+forty_states_data <- setdiff(fulldata, ten_states_data)
+
+dim(ten_states_data)
+dim(forty_states_data)
+```
+8.
+The training data (40 states model) accuracy for the first model is 127 incorrect out of 2558 for an accuracy of 95%.My second model had 127 incorrect for a 95% accuracy.The third model using the data of the 40 states also had a training accuracy of 95%.
+
+```{r}
+#using 40 states to train
+fortystatereg1 <- lm(i_republican_2016 ~ i_republican_2012 + pop_pct_change, data = forty_states_data)
+
+#fit onto training data
+pred40state1 = predict(object = fortystatereg1, newdata = forty_states_data)
+
+#check same dim
+pred40state1 %>% length()
+forty_states_data %>% nrow()
+
+#new df w/ predictions
+forty_state_acc1 = data.frame(
+  fips = forty_states_data$fips,
+  i_republican_2016 = pred40state1
+)
+
+#convert to 1 or 0 to cmpare with og train data
+forty_state_acc1 <- forty_state_acc1 %>%
+  mutate(i_republican_2016 = ifelse(i_republican_2016 >= 0.50, 1, 0))
+
+ 
+forty_states_results1 <- ifelse(forty_state_acc1$i_republican_2016 == forty_states_data$i_republican_2016, 1, 0) 
+table(forty_states_results1)
+```
+
+```{r}
+forty_states_data <- forty_states_data %>%
+  mutate(inter_rep_pop = i_republican_2012 * pop_pct_change,
+         inter_home_hh = home_median_value * persons_per_hh )
+
+fortystatereg2 <- lm(i_republican_2016 ~ i_republican_2012 + pop_pct_change + inter_rep_pop + home_median_value + persons_per_hh + inter_home_hh, data = forty_states_data)
+         
+pred40state2 = predict(object = fortystatereg2, newdata = forty_states_data)
+
+forty_state_acc2 = data.frame(
+  fips = forty_states_data$fips,
+  i_republican_2016 = pred40state2
+)
+
+forty_state_acc2 <- forty_state_acc2 %>%
+  mutate(i_republican_2016 = ifelse(i_republican_2016 >= 0.50, 1, 0))
+      
+ forty_states_results2 <- ifelse(forty_state_acc2$i_republican_2016 == forty_states_data$i_republican_2016, 1, 0) 
+table(forty_states_results2)  
+```
+```{r}
+forty_states_data <- forty_states_data %>%
+  mutate(
+    repub_votes_squared = i_republican_2012 * i_republican_2012)
+
+fortystatereg3 <- lm(i_republican_2016 ~ i_republican_2012 + repub_votes_squared + pop_pct_change + inter_rep_pop + home_median_value + persons_per_hh + inter_home_hh, data = forty_states_data)
+
+pred40state3 = predict(object = fortystatereg3, newdata = forty_states_data)
+
+forty_state_acc3 = data.frame(
+  fips = forty_states_data$fips,
+  i_republican_2016 = pred40state3
+)
+
+forty_state_acc3 <- forty_state_acc3 %>%
+  mutate(i_republican_2016 = ifelse(i_republican_2016 >= 0.50, 1, 0))
+      
+ forty_states_results3 <- ifelse(forty_state_acc3$i_republican_2016 == forty_states_data$i_republican_2016, 1, 0) 
+table(forty_states_results3)
+```
+9-10.
+Using the ten state data frame as the validation test, the first model has 444 correct out of 558 observations for an accuracy of 79%. The second and third models both have 496 observations correct for an accuracy of 88%. The increase in accuracy while using the data split into 40 and 10 states from the first model to the 2nd and 3rd models are large enough to justify preferring the 2nd or 3rd model in this case.
+
+```{r}
+#test on the 10 state validation for first model
+tenstatereg1 <- lm(i_republican_2016 ~ i_republican_2012 + pop_pct_change, data = ten_states_data)
+
+pred10state1 = predict(object = fortystatereg1, newdata = ten_states_data)
+
+ten_state_acc1 = data.frame(
+  fips = ten_states_data$fips,
+  i_republican_2016 = pred10state1
+)
+
+ten_state_acc1 <- ten_state_acc1 %>%
+   mutate(i_republican_2016 = ifelse(i_republican_2016 >= 0.50, 1, 0))
+
+
+ten_state_results1 <- ifelse(ten_state_acc1$i_republican_2016 == ten_states_data$i_republican_2016, 1, 0) 
+table(ten_state_results1)
+```
+
+
+
+```{r}
+
+ten_states_data <- ten_states_data %>%
+  mutate(inter_rep_pop = i_republican_2012 * pop_pct_change,
+         inter_home_hh = home_median_value * persons_per_hh )
+
+tenstatereg2 <- lm(i_republican_2016 ~ i_republican_2012 + pop_pct_change + inter_rep_pop + home_median_value + persons_per_hh + inter_home_hh, data = ten_states_data)
+
+pred10state2 = predict(object = tenstatereg2, newdata = ten_states_data)
+
+ten_state_acc2 = data.frame(
+  fips = ten_states_data$fips,
+  i_republican_2016 = pred10state2
+)
+
+ten_state_acc2 <- ten_state_acc2 %>%
+   mutate(i_republican_2016 = ifelse(i_republican_2016 >= 0.50, 1, 0))
+
+
+ten_state_results2 <- ifelse(ten_state_acc2$i_republican_2016 == ten_states_data$i_republican_2016, 1, 0) 
+table(ten_state_results2)
+```
+
+
+
+```{r}
+ten_states_data <- ten_states_data %>%
+  mutate(
+    repub_votes_squared = i_republican_2012 * i_republican_2012)
+
+tenstatereg3 <- lm(i_republican_2016 ~ i_republican_2012 + repub_votes_squared + pop_pct_change + inter_rep_pop + home_median_value + persons_per_hh + inter_home_hh, data = ten_states_data)
+
+pred10state3 = predict(object = tenstatereg3, newdata = ten_states_data)
+
+ten_state_acc3 = data.frame(
+  fips = ten_states_data$fips,
+  i_republican_2016 = pred10state3
+)
+
+ten_state_acc3 <- ten_state_acc3 %>%
+   mutate(i_republican_2016 = ifelse(i_republican_2016 >= 0.50, 1, 0))
+
+
+ten_state_results3 <- ifelse(ten_state_acc3$i_republican_2016 == ten_states_data$i_republican_2016, 1, 0) 
+table(ten_state_results3)
+```
+Part 3
+11.
+
+
+
+```{r}
+#5 fold cv on first reg to see accuracy in training
+ctrl1 <- trainControl(method = "cv", number = 5, savePredictions =  TRUE)
+kfoldreg1 <- train(factor(i_republican_2016) ~ i_republican_2012 + pop_pct_change, data = train, method = "glm", trControl = ctrl1)
+
+
+kfoldreg1
+
+
+
+
+
+
+pred = predict(object = kfoldreg1, newdata = test)
+
+acc = data.frame(
+  fips = test$fips,
+  i_republican_2016 = pred
+)
+
+
+
+
+results <- ifelse(acc$i_republican_2016 == test$i_republican_2016, 1, 0) 
+table(results)
+
+```
+
+```{r}
+fulldata <- fulldata %>%
+  mutate(inter_rep_pop = i_republican_2012 * pop_pct_change,
+         inter_home_hh = home_median_value * persons_per_hh )
+
+
+
+ctrl2 <- trainControl(method = "cv", number = 5, savePredictions =  TRUE)
+kfoldreg2 <- train(factor(i_republican_2016) ~  i_republican_2012 + pop_pct_change + inter_rep_pop + home_median_value + persons_per_hh + inter_home_hh, data = train, method = "glm", trControl = ctrl2)
+
+
+kfoldreg2
+
+
+predk2 = predict(object = kfoldreg2, newdata = test)
+
+acck2 = data.frame(
+  fips = test$fips,
+  i_republican_2016 = predk2
+)
+
+
+resultsk2 <- ifelse(acck2$i_republican_2016 == test$i_republican_2016, 1, 0) 
+table(resultsk2)
+```
+
+```{r}
+fulldata <- fulldata %>%
+  mutate(
+    repub_votes_squared = i_republican_2012 * i_republican_2012)
+
+ctrl3 <- trainControl(method = "cv", number = 5, savePredictions =  TRUE)
+kfoldreg3 <- train(factor(i_republican_2016) ~  i_republican_2012 + repub_votes_squared + pop_pct_change + inter_rep_pop + home_median_value + persons_per_hh + inter_home_hh, data = train, method = "glm", trControl = ctrl3)
+
+
+print(kfoldreg3)
+
+kfoldreg3$finalModel
+
+kfoldreg3$resample
+
+predk3 = predict(object = kfoldreg3, newdata = test)
+
+acck3 = data.frame(
+  fips = test$fips,
+  i_republican_2016 = predk3
+)
+
+
+resultsk3 <- ifelse(acck3$i_republican_2016 == test$i_republican_2016, 1, 0) 
+table(resultsk3)
+
+```
+Using K fold of 5 the first model has an accuracy of 91.5%. the second model increases to 93.1% and the third model's average accuracy is 93%. These results seem to go along with what most of the other's have shown which says that model 2 and model 3 are about the same level of accuracy.This seems to show that the addition's I made to the third linear regression model with polynomials does little to add onto prediction ability. Knowing this I would likely prefer model 2 the best.
+
+Part 4
+
+15. The validation set with states was easily the worst estimate of out of sample accuracy in all regards. The validation set and 5 fold cross validation were about the same for model 2 and 3 that I created. It seems throughout that the third linear regression model I created was the same or even slightly worse than the second model at prediction so if I was aiming for the highest possible accuracy I would fiddle around with that some more. The k fold is usually better than simply using a single validation set since it allows the model to train on multiples training and testing splits but it did not have much impact in this case, likely because there were not a super large amount of observations and the predictor of if they voted Republican in the previous election seems to be fairly good at estimating the outcome of if they vote Republican in the next election. The state validation set which clearly performed the worse is likely because we are just randomly putting ten states in and the counties in these states could be totally different and what predicts something in one county may not be the same in another. This same logic applies to the 40/10 state split because some states can be so different it would be difficult to make a model that can perfectly predict on both of the states. The results could potentially change dramatically if the ten states that were taken out for the validation set were different. Having all the large states or all the states of certain characteristics in one set would make it hard for the set of data to either train accurately or be a representative testing data set.
+
+16. I think the accuracy will likely diminish drastically in future elections. This is because demographics of states can change as people move in and out and none of the models that were created were especially in depth with all the possible variables. Also what I assume to be one of the best predictors (if they voted Republican in the 2012 election) will lose values as the years go on. This is because someone who votes one way in one election is probably likely to vote that way in the very next election, but beliefs or stances of certain candidates can move far apart as multiple elections occur as the time moves forward. 
+
+17. By having a larger percent of data in the validation set, the models out-of-sample prediction accuracy will be higher and better able to be trusted as ideally the validation set would then look more representative to the actual real world data. The idea behind this being a small validation set if you were unlucky and got all the variables of a certain characteristic that actually are not that common in the data set overall, it could skew your findings towards distrusting the model because it has low out of sample accuracy, when in reality it is only low because of unlucky randomization. The downsides of having more data in the validation set is that your model will have less data to train on and so much like the previous argument, the model could be inaccurate because of bad randomization or not being able to train well enough on the small amount of data in the training data set. Overfitting occurs when the model learns correlations that do not necessarily exist in the data set overall or in the whole sample, this can occur more easily when there is a small amount of data in the training set as your model will train based on what it is given regardless of if the training data represents the data overall. There are advantages and disadvantages to both ways but the training data set needs to be large enough so you can be reasonably sure it does not include spurious correlations.
+
+18. A validation set could be useful for looking at a specific important variable as it is easier to code. This could give you an initial look at just that variable through a validation set you make before using the k fold for the validation of the entire model overall.  As we had to do in part two where we chose ten states randomly to be the validation set, we made sure to include at least one of the large states and to not include all of them, as having them all in one dataset would put the bulk of the observations in the dataset that ended up with the large states. So using a validation set may allow you to mess with characteristics like that that you know could mess up the model. This will allow you to still randomize but perhaps ensure that certain very important characteristics are spread among training and testing data.
+
+19. I think accuracy is a good metric for this model performance. We are trying to determine if the model accurately predicts if the county votes Republican in the 2016 election and our data has this information coded as essentially a yes or no. This means that using measures such as MSE does not work as well since the variable we are looking at is not necessarily numerical. The only downside to the way we did it was he had to round up a .5 in our prediction to be a 1 for a yes. This lessens the credibility of the predictions a bit as a prediction that we say is a yes that was only .5 vs a prediction that was already 1 should hold different weight in some regards. Perhaps there is a way to weight the predictions we got based on how close to 0 or 1 they were. This would allow us to continue using accuracy as a measure of model performance but perhaps have it be a bit more accurate as the rounding does likely cause our predictions to be a bit off of what they are truly predicting.
+
+20. I think the idea of supervised vs unsupervised learning is interesting. Before this class I would not have said there is a way to learn relationships without an output to judge it on. Of what we have covered heavily the bias - variance tradeoff is an easy example of something that is interesting because we spent all of last term reducing bias as much as possible and it is strange to be ok with increasing it for a resulting lowering in variance. I've found that the class as a whole, while I am still going over the stuff we have learned to fully understand that, has allowed me to better understand a lot of the stuff that I sort of just brushed past in the last term that I did not quite understand. Also the tidymodels seem very interesting and important once I get the hang of using them they seem like a great time saver. 
+
+
+
+
+
+
+
+
+
+
+

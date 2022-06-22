@@ -1,0 +1,119 @@
+---
+title: "project004"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Packages
+library(pacman)
+
+p_load(tidyverse, patchwork, data.table, tidymodels, parallel, magrittr, here, ranger )
+
+setwd("C:/Users/campb/OneDrive/econometrics/MLprojects/project004")
+
+
+train_dt <- read.csv("train.csv") 
+test_dt <- read.csv("test.csv") 
+
+
+```
+
+
+
+```{r}
+# Join the datasets together
+all_dt = rbindlist(
+  list(train_dt, test_dt),
+  use.names = T, fill = T
+)
+
+# Find indices of training and testing datasets
+i_train = 1:nrow(train_dt)
+i_test = (nrow(train_dt)+1):nrow(all_dt)
+# Define the custom-split object
+kaggle_split = make_splits(
+  x = list(analysis = i_train, assessment = i_test),
+  data= all_dt
+)
+
+```
+
+```{r}
+# Set up a recipe to create a factor of the label
+simple_recipe = 
+  recipe(label ~ ., data = train_dt) %>% 
+  step_mutate(label = as.factor(label))
+```
+
+```{r, warning=FALSE}
+set.seed(35436)
+digit_cv = train_dt %>% vfold_cv(v = 5)
+
+
+
+library("xgboost")
+
+boost_model = boost_tree(trees = tune(),
+           tree_depth = tune(),
+           min_n = 10,
+           learn_rate = tune(),
+           mtry = 2
+           ) %>%
+  set_engine("xgboost") %>%
+  set_mode("classification") 
+
+boost_model
+
+boost_wf = workflow() %>%
+  add_model(boost_model) %>%
+  add_recipe(simple_recipe)
+
+boost_fit = boost_wf %>%
+  tune_grid(
+    digit_cv,
+    grid = expand_grid(
+                       learn_rate = c( .2, .25),
+                       trees = c(1000, 2000),
+                       tree_depth = c(4, 5)),
+    metrics = metric_set(accuracy)
+  )
+
+boost_fit%>%
+  collect_metrics()
+#see model with best accuracy
+best_accuracy_boost <- boost_fit %>%
+  select_best("accuracy")
+best_accuracy_boost
+
+#accuracy 96.61%
+
+
+
+```
+```{r}
+#predict and submit
+
+final_boost =
+    boost_wf %>% 
+    finalize_workflow(select_best(boost_fit, metric = "accuracy"))
+final_fit = last_fit(
+  final_boost,
+  split = kaggle_split
+)
+
+# Save the predictions
+final_fit %>%
+  collect_predictions() %>%
+  transmute(
+    ImageId = 1:n(),
+    Label = .pred_class %>% as.character() %>% as.integer()) %>% 
+  write_csv("/Users/campb/OneDrive/econometrics/MLprojects/project004/pro004.csv")
+
+
+
+```
+

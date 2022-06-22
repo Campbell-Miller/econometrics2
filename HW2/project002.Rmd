@@ -1,0 +1,297 @@
+---
+title: "project002"
+author: "Campbell Miller"
+date: "2/14/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(pacman)
+p_load(
+  tidyverse, modeldata, skimr, janitor, kknn, tidymodels, magrittr, broom, stargazer, sandwich, ggplot2, rlang, arsenal, glmnet, yardstick
+)
+
+setwd('C:/Users/campb/OneDrive/econometrics/MLprojects')
+fulldata <- read.csv("election-2016.csv")
+```
+PART 1
+01. Using 5-fold cross validation: tune a Lasso regression model. (Don't forget: You can add interactions, transformations, etc. in your recipe. You'll also want to standardize your variables.)
+
+```{r}
+
+set.seed(0319)
+
+
+
+#make 5fold cv for training data
+datacv <- fulldata %>% 
+  vfold_cv(v = 5)
+      
+datacv %>% tidy()                
+
+```
+```{r}
+#recipe
+voting_recipe =
+  recipe(i_republican_2016 ~ income_median_hh + pop_pct_change + n_votes_republican_2012, data = fulldata) %>%
+  #create dummies for all caterrgorical
+  step_dummy(all_predictors() & all_nominal()) %>%
+#standarize variables
+  step_normalize(all_predictors() & all_numeric()) 
+
+
+voting_clean = voting_recipe %>% prep() %>% juice()
+
+```
+
+
+```{r}
+#define a lasso model for the recipe
+model_lasso =
+  linear_reg(penalty = tune(), mixture = 1) %>%
+  set_engine("glmnet")
+#set the range of lamdas
+lambdas = 10^seq(from = 5, to = -2, length = 100)
+
+#set workflow
+workflow_lasso = workflow() %>%
+  add_model(model_lasso) %>%
+  add_recipe(voting_recipe) 
+
+#tune with lambdas
+cv_lasso =
+  workflow_lasso %>%
+  tune_grid(
+   resamples = datacv,
+    grid = data.frame(penalty = lambdas),
+    metrics = metric_set(mpe)
+  )
+
+cv_lasso %>% show_best()
+
+best_penalty <- cv_lasso %>%
+  select_best("mpe")
+best_penalty
+```
+02. What is the penalty for your 'best' model?
+
+The penalty that my best model outputted was .01, this is the value of lambda which tunes our regression by adding extra weight to coefficients.
+
+03. Which metric did you use to define the 'best' model? Does it make sense in this setting? Explain your answer.
+
+The metric that I used was mean percent error "mpe", I did this because I wanted to use accuracy to show the percent of guesses that I got correctly but it did not work with the regression model and I kept getting errors because it was a classification metric and not a regression metric. I looked through the list of regression metrics and mean percentage error seemed to be similar to accuracy so I chose that as the metric to define the best model. I chose this because we want to predict which county voted for which candidate in the election and the mean percentage error will tell us the average of percentage errors by which our predictions of a model are different from the actual values. 
+
+
+04. Now tune an elasticnet prediction model.
+
+
+```{r}
+elastic_voting_recipe =
+  recipe(i_republican_2016 ~ income_median_hh + pop_pct_change + n_votes_republican_2012, data = fulldata) %>%
+  #create dummies for all caterrgorical
+  step_dummy(all_predictors() & all_nominal()) %>%
+#standarize variables
+  step_normalize(all_predictors() & all_numeric()) 
+
+
+elastic_voting_clean = voting_recipe %>% prep() %>% juice()
+```
+
+
+```{r}
+#define a elasticnet model for the recipe
+model_elasticnet =
+  linear_reg(penalty = tune(), mixture = tune()) %>%
+  set_engine("glmnet")
+#set the range of lamdas
+lambdas = 10^seq(from = 5, to = -2, length = 100)
+#set range of alphas
+alphas = seq(from = 0, to = 1, by = 0.1)
+#set workflow
+workflow_elasticnet = workflow() %>%
+  add_model(model_elasticnet) %>%
+  add_recipe(elastic_voting_recipe) 
+
+#tune with lambdas and alphas
+cv_elasticnet =
+  workflow_elasticnet %>%
+  tune_grid(
+   resamples = datacv,
+    grid = grid_regular(mixture(), penalty()),
+    metrics = metric_set(mpe)
+  )
+
+cv_elasticnet %>% show_best()
+
+best_penalty1 <- cv_elasticnet %>%
+  select_best("mpe")
+best_penalty1
+```
+
+5. What do the chosen hyperparameters for the elasticnet tell you about the Ridge vs. Lasso in this setting?
+
+The penalty chosen by the elasticnet model is .000001 and the mixture chosen is 0. The mixture of 0 is the same mixture as a ridge regression would of set, this tells us that a ridge regression would actually fit this model better. A lasso regression sets coefficients to 0 while ridge just reduces them near zero. Since the elasticnet which tunes mixture between 0 and 1, chose 0 which is a ridge regression, the penalty on coefficients for this model wants there to be large penalties for large beta values and small penalty for small beta values (but not set to 0).
+
+
+
+
+
+
+
+
+            
+
+Part 2
+
+06. Now fit a logistic regression (logistic_reg() in tidymodels) model—using 5-fold cross validation to get a sense of your model's performance (record the following metrics: accuracy, precision, specificity, sensitivity, ROC AUC).
+
+Hint: You can tell tune_grid() or fit_resamples() which metrics to collect via the metrics argument. You'll want to give the argument a metric_set().
+
+Important: For true classification methods (e.g., logistic regression), you will need an outcome variable that is character or factor (not simply a binary numerical variable). So you'll need to add another column to the dataset or transform the current column.
+
+
+```{r}
+#check class of outcome (it is integer)
+ class(fulldata$i_republican_2016)
+
+#make new column to make outcome character
+fulldata <- fulldata %>%
+  mutate(i_republican_2016new = ifelse(i_republican_2016 == 1, "R WIN", "R LOSE"))
+#outcome is now character
+class(fulldata$i_republican_2016new)
+```
+
+```{r}
+
+#logistig regression recipe upadted with new outcome
+logreg_voting_recipe =
+  recipe(i_republican_2016new ~ income_median_hh + pop_pct_change + n_votes_republican_2012, data = fulldata) %>%
+  step_normalize(all_predictors())
+  
+
+
+logreg_voting_clean = logreg_voting_recipe %>% prep() %>% juice()
+
+logreg_voting_clean_cv = logreg_voting_clean %>%
+  vfold_cv(v = 5)
+```
+
+
+
+```{r}
+#define a log reg model for the recipe
+model_logreg =
+  logistic_reg() %>%
+  set_engine("glm") %>%
+  set_mode("classification")
+
+#set workflow
+workflow_logreg <- workflow() %>%
+  add_model(model_logreg) %>%
+  add_recipe(logreg_voting_recipe) 
+  
+#fit
+logreg_fit <- workflow_logreg %>%
+  fit_resamples(logreg_voting_clean_cv, 
+            metrics = metric_set(precision, roc_auc, accuracy, spec, sens))
+  
+logreg_fit %>% collect_metrics()
+
+```
+07. What is the cross-validated accuracy of this logistic model?
+
+The cross-validated accuracy is .85.4%
+
+
+08. Is your accuracy "good"? Explain your answer—including a comparison to the null classifier.
+
+```{r}
+fulldata <- fulldata %>%
+  mutate(null_classifier = ifelse(i_republican_2016 == 1, 1, 1))
+
+
+null_classifier_results <- ifelse(fulldata$i_republican_2016 == fulldata$null_classifier, 1, 0)
+  table(null_classifier_results)
+  
+null_acc <- 2624/(492+2624)
+null_acc
+
+```
+Accuracy is the number of all correct predictions divided by the total number of the dataset. The null classifier tells us what our accuracy would be if we assumed every county voted for Republican. The accuracy on the null classifier is 84.1% so just 1% under the models accuracy.
+
+
+
+09. What do the other metrics tell you about your model? Is it "good"? Are you consistently missing one class of outcomes? Explain.
+
+The other metrics range from 64% to 98%, with the sensitivity at 14%. So all of the metrics are decent except for the sensitivity. A previous model that I tested also had one metric that was very low, so it seems like there will consistently have one metric that is very low. This would seemingly make sense because the metrics in the confusion matrix all involve different variations of the same variables in equations, so unless the model is nearly perfect one of the metrics will likely suffer and you can build a model based on the metrics that you think are the most important.
+
+Part 3: Logistic Lasso
+
+10. Now fit a logistic Lasso regression (logistic_reg() in tidymodels, but now tuning the penalty) model—using 5-fold cross validation. Again: record the following metrics: accuracy, precision, specificity, sensitivity, ROC AUC.
+
+```{r}
+#define model
+loglasso_model <-
+  logistic_reg(
+    penalty = tune(), mixture = 1
+  ) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
+
+#define workflow
+loglasso_workflow <- workflow() %>%
+   add_model(loglasso_model) %>%
+  add_recipe(logreg_voting_recipe)
+
+#define workflow then fit it to model
+fit_loglasso_model <-
+  loglasso_workflow %>%
+  tune_grid(
+    resamples = logreg_voting_clean_cv,
+    grid = data.frame(penalty = lambdas),
+    metrics = metric_set(accuracy, spec, sens, roc_auc, precision)
+  )
+
+#shows which model has best accuracy measure
+fit_loglasso_model %>% select_best("accuracy")
+
+#data with all the metrics
+acc <- fit_loglasso_model %>% collect_metrics()
+#filter to the model we found had best accuracy above
+acc <- acc %>% filter(.config == "Preprocessor1_Model001")
+
+acc
+#accuracy is .8928
+```
+
+11. How does the performance of this logistic Lasso compare to the logistic regression in Part 2?
+
+The logistic Lasso accuracy is about the same, the precision is slightly higher, the roc_auc is slightly lower, the sensitivity is slightly lower, the specificity is slightly higher. All of the metrics are less than 5% difference.
+
+
+12. Do you think moving to a logistic elasticnet would improve anything? Explain.
+
+I do think the elasticnet would improve the results, because the previous elasticnet model we ran showed that the model and data performs better as a Ridge regression since it chose a mixture of 1. This shows that the Lasso regression we ran likely does not fit this model well since the previous elasticnet did not choose a mixture above 0. 
+
+
+Part 4: Reflection
+
+
+13. Why might we prefer Lasso to elasticnet (or vice versa)?
+
+Lasso always as a penalty that does not scale with the coefficient size so the only way to avoid the penalty is to set the coefficients to zero. If you know from the start some of the variables in your data/model do not impact your outcome, you would want to use Lasso to make sure that they are removed from the model. Elasticnet tunes the penatly and alpha values between Lasso and Ridge so it is generally the better measure to go to as it can choose what is the best penalty and mixture. Using Lasso or Ridge would only make sense if you have previous knowledge about your data and want to ensure they are either set to zero or emphasized largely.
+
+14. What the the differences between logistic regression and linear regression? What are the similarities?
+
+The main difference is that linear regression sets a straight line which is a continuous output, while logistic regression has discreet output with a curve fitted line. Logistic regression is also used for classification problems.The linear regression struggles with data that has most values at one extreme because it will be hard to fit a line on that data that accurately predicts the values of the other extreme side that are not common. The curve of the logistic regression is better able to fit certain types of data. They are similar in the sense that both regressions fit a line on data to create a general trend.
+
+15. Imagine you worked for a specific political party. Which metric would you use for assessing model performance?
+
+The goal of this model is to predict which party won each county for the election. For that I would use sensitivity since it tells us the share of positive outcomes that were correctly predicted. you could look at all the counties that were predicted to go Republican and see how many predictions were correct, if it is high then your model succeeds in predicting which county would go Republican. If it is low then you would want to adjust your model.
+
+
+
